@@ -1,0 +1,111 @@
+name: Playwright Tests
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+# Required for allure-action to post PR comments, GitHub Checks, and Pages deployment
+permissions:
+  contents: read
+  checks: write
+  pull-requests: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Run Tests
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'yarn'
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Install Playwright browsers
+        run: yarn playwright install --with-deps chromium
+
+      # Run all tests; continue even if some fail so we always publish results
+      - name: Run Playwright tests
+        id: playwright
+        run: yarn test
+        continue-on-error: true
+
+      # Generate Allure 3 Classic report (output dir defined in allurerc.mjs)
+      - name: Generate Allure Report
+        if: always()
+        run: yarn allure:generate
+
+      # Post test summary as a PR comment and create a GitHub Check
+      # Reads allure-report/summary.json produced by allure classic
+      - name: Post Allure Report summary to PR
+        if: always()
+        uses: allure-framework/allure-action@v0.7.0
+        with:
+          report-directory: allure-report
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Upload full report for the publish-report job and for manual inspection
+      - name: Upload Allure Report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: allure-report-${{ github.run_number }}
+          path: allure-report/
+          retention-days: 30
+
+      # Fail the job if tests actually failed (deferred via continue-on-error)
+      - name: Assert test outcome
+        if: always()
+        run: |
+          if [ "${{ steps.playwright.outcome }}" = "failure" ]; then
+            echo "Tests failed. See Allure report in artifacts."
+            exit 1
+          fi
+
+  # Deploy Allure report to GitHub Pages on every push to main/master
+  publish-report:
+    name: Publish to GitHub Pages
+    needs: test
+    if: |
+      always() &&
+      github.event_name == 'push' &&
+      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Download Allure Report artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: allure-report-${{ github.run_number }}
+          path: allure-report
+
+      - name: Setup GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: allure-report
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

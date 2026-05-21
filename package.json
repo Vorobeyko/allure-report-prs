@@ -1,0 +1,22 @@
+{
+  "name": "allure-action-tests",
+  "version": "1.0.0",
+  "description": "Example: TypeScript + Playwright + Allure 3 + allure-action PR comments",
+  "packageManager": "yarn@1.22.22",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:debug": "playwright test --debug",
+    "allure:generate": "allure classic allure-results",
+    "allure:open": "allure open",
+    "allure:serve": "allure serve allure-results"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0",
+    "@types/node": "^22.0.0",
+    "allure": "^3.0.0",
+    "allure-js-commons": "^3.8.0",
+    "allure-playwright": "^3.8.0",
+    "typescript": "^5.7.0"
+  }
+}
