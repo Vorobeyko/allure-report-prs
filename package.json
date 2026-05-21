@@ -7,7 +7,7 @@
     "test": "playwright test",
     "test:headed": "playwright test --headed",
     "test:debug": "playwright test --debug",
-    "allure:generate": "allure allure-results",
+    "allure:generate": "allure generate",
     "allure:open": "allure open",
     "allure:serve": "allure serve allure-results"
   },
