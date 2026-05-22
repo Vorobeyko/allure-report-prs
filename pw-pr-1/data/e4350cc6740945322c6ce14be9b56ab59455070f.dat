@@ -1,0 +1,1 @@
+{"type":"metadata","data":{"description":"Division by zero must throw a descriptive error to prevent silent NaN propagation."}}
