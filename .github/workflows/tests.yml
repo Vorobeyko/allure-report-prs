@@ -14,12 +14,11 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  # Don't cancel cleanup runs when a PR is closed
   cancel-in-progress: ${{ github.event.action != 'closed' }}
 
 jobs:
   # ─────────────────────────────────────────────
-  # Main: run tests, publish report, post comment
+  # Main: run tests, publish reports, post comment
   # ─────────────────────────────────────────────
   test:
     name: Run Tests
@@ -50,8 +49,8 @@ jobs:
         if: always()
         run: yarn allure:generate
 
-      # Compute the target subdirectory and its public URL
-      - name: Compute report path
+      # Compute subdirectories and public URLs for both reports
+      - name: Compute report paths
         id: report
         if: always()
         run: |
@@ -59,49 +58,98 @@ jobs:
           REPO="${{ github.event.repository.name }}"
 
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            DIR="pr-${{ github.event.pull_request.number }}"
+            N="${{ github.event.pull_request.number }}"
+            ALLURE_DIR="pr-${N}"
+            PW_DIR="pw-pr-${N}"
           else
-            DIR="main"
+            ALLURE_DIR="main"
+            PW_DIR="pw-main"
           fi
 
-          echo "dir=$DIR" >> "$GITHUB_OUTPUT"
-          echo "url=https://${OWNER}.github.io/${REPO}/${DIR}/" >> "$GITHUB_OUTPUT"
+          BASE="https://${OWNER}.github.io/${REPO}"
+          echo "allure-dir=${ALLURE_DIR}"          >> "$GITHUB_OUTPUT"
+          echo "allure-url=${BASE}/${ALLURE_DIR}/" >> "$GITHUB_OUTPUT"
+          echo "pw-dir=${PW_DIR}"                  >> "$GITHUB_OUTPUT"
+          echo "pw-url=${BASE}/${PW_DIR}/"         >> "$GITHUB_OUTPUT"
 
-      # Deploy to gh-pages branch under the computed subdirectory.
-      # keep_files: true — doesn't wipe other PR/main directories.
-      - name: Deploy to gh-pages
+      # ── Allure ──────────────────────────────────
+      - name: Deploy Allure report to gh-pages
         if: always()
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./allure-report
-          destination_dir: ${{ steps.report.outputs.dir }}
+          destination_dir: ${{ steps.report.outputs.allure-dir }}
           keep_files: true
 
-      # GitHub Check + PR comment with stats table.
-      # remote-href populates the "Report" column → direct link to Pages report.
+      # GitHub Check + PR comment with stats table; "Report" column → Allure on Pages
       - name: Post Allure summary
         if: always()
         uses: allure-framework/allure-action@v0.7.0
         with:
           report-directory: allure-report
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          remote-href: ${{ steps.report.outputs.url }}
+          remote-href: ${{ steps.report.outputs.allure-url }}
 
+      # ── Playwright HTML ──────────────────────────
+      - name: Deploy Playwright report to gh-pages
+        if: always()
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./playwright-report
+          destination_dir: ${{ steps.report.outputs.pw-dir }}
+          keep_files: true
+
+      # Post Playwright report link as a separate PR comment (create once, update on re-run)
+      - name: Post Playwright report link to PR
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const url = '${{ steps.report.outputs.pw-url }}';
+            const marker = '<!-- pw-report-link -->';
+            const body = `${marker}\n🎭 **Playwright report on GitHub Pages:** ${url}`;
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const existing = comments.find(c => c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
+      # ────────────────────────────────────────────
       - name: Assert test outcome
         if: always()
         run: |
           if [ "${{ steps.playwright.outcome }}" = "failure" ]; then
-            echo "Tests failed. Report: ${{ steps.report.outputs.url }}"
+            echo "Tests failed."
+            echo "  Allure:     ${{ steps.report.outputs.allure-url }}"
+            echo "  Playwright: ${{ steps.report.outputs.pw-url }}"
             exit 1
           fi
 
   # ─────────────────────────────────────────────
-  # Cleanup: remove PR directory from gh-pages
-  # when the PR is merged or closed
+  # Cleanup: remove both PR directories from gh-pages
   # ─────────────────────────────────────────────
   cleanup:
-    name: Remove PR report from gh-pages
+    name: Remove PR reports from gh-pages
     if: github.event_name == 'pull_request' && github.event.action == 'closed'
     runs-on: ubuntu-latest
     steps:
@@ -109,15 +157,26 @@ jobs:
         with:
           ref: gh-pages
 
-      - name: Delete PR report directory
+      - name: Delete PR report directories
         run: |
-          PR_DIR="pr-${{ github.event.pull_request.number }}"
-          if [ -d "$PR_DIR" ]; then
-            git config user.name  "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git rm -rf "$PR_DIR"
-            git commit -m "chore: remove Allure report for PR #${{ github.event.pull_request.number }}"
+          N="${{ github.event.pull_request.number }}"
+          ALLURE_DIR="pr-${N}"
+          PW_DIR="pw-pr-${N}"
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          REMOVED=0
+          for DIR in "$ALLURE_DIR" "$PW_DIR"; do
+            if [ -d "$DIR" ]; then
+              git rm -rf "$DIR"
+              REMOVED=1
+            fi
+          done
+
+          if [ "$REMOVED" = "1" ]; then
+            git commit -m "chore: remove reports for PR #${N}"
             git push
           else
-            echo "Nothing to clean up for $PR_DIR"
+            echo "Nothing to clean up for PR #${N}"
           fi

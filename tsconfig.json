@@ -8,8 +8,9 @@
     "skipLibCheck": true,
     "outDir": "dist",
     "baseUrl": ".",
-    "experimentalDecorators": true
+    "experimentalDecorators": true,
+    "types": ["node"]
   },
-  "include": ["src/**/*", "tests/**/*"],
+  "include": ["src/**/*", "tests/**/*", "playwright.config.ts"],
   "exclude": ["node_modules", "dist", "allure-report", "allure-results"]
 }
