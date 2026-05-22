@@ -48,7 +48,7 @@ test.describe('Navigation', () => {
     });
 
     await step('Verify page title', async () => {
-      await expect(page).toHaveTitle(/Exampled Domain/);
+      await expect(page).toHaveTitle(/Example Domain/);
     });
 
     await step('Verify h1 heading', async () => {
