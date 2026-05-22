@@ -101,38 +101,16 @@ jobs:
           destination_dir: ${{ steps.report.outputs.pw-dir }}
           keep_files: true
 
-      # Post Playwright report link as a separate PR comment (create once, update on re-run)
-      - name: Post Playwright report link to PR
+      # Post Playwright report as a PR comment with stats table (create once, update on re-run)
+      - name: Post Playwright report summary to PR
         if: always() && github.event_name == 'pull_request'
         uses: actions/github-script@v7
+        env:
+          PW_REPORT_URL: ${{ steps.report.outputs.pw-url }}
         with:
           script: |
-            const url = '${{ steps.report.outputs.pw-url }}';
-            const marker = '<!-- pw-report-link -->';
-            const body = `${marker}\n🎭 **Playwright report on GitHub Pages:** ${url}`;
-
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-            });
-
-            const existing = comments.find(c => c.body.includes(marker));
-            if (existing) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: existing.id,
-                body,
-              });
-            } else {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                body,
-              });
-            }
+            const postComment = require('./.github/scripts/post-pw-comment.js');
+            await postComment({ github, context, core });
 
       # ────────────────────────────────────────────
       - name: Assert test outcome
