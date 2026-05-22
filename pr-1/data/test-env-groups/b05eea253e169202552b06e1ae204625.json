@@ -1,1 +1,1 @@
-{"id":"b05eea253e169202552b06e1ae204625","fullName":"api/todos.spec.ts:122:7","name":"DELETE /todos/:id — deletes todo","status":"passed","testResultsByEnv":{"default":"6297c9b9266086d0530c157cfa151db9"}}
+{"id":"b05eea253e169202552b06e1ae204625","fullName":"api/todos.spec.ts:122:7","name":"DELETE /todos/:id — deletes todo","status":"passed","testResultsByEnv":{"default":"8df5a9ae8fe395bcf0d0c4f2c4c06175"}}
