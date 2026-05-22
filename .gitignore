@@ -8,3 +8,4 @@ test-results/
 .DS_Store
 .claude
 GITHUB_SETUP.md
+allure-history.jsonl

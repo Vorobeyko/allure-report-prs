@@ -5,31 +5,31 @@ on:
     branches: [main, master]
   pull_request:
     branches: [main, master]
+    types: [opened, synchronize, reopened, closed]
 
-# Required for allure-action to post PR comments, GitHub Checks, and Pages deployment
 permissions:
-  contents: read
-  checks: write
-  pull-requests: write
-  pages: write
-  id-token: write
+  contents: write      # push to gh-pages branch
+  checks: write        # allure-action GitHub Checks
+  pull-requests: write # PR comments
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event.action != 'closed' }}
 
 jobs:
+  # ─────────────────────────────────────────────
+  # Main: run tests, publish reports, post comment
+  # ─────────────────────────────────────────────
   test:
     name: Run Tests
+    if: github.event.action != 'closed'
     timeout-minutes: 30
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'yarn'
@@ -40,72 +40,121 @@ jobs:
       - name: Install Playwright browsers
         run: yarn playwright install --with-deps chromium
 
-      # Run all tests; continue even if some fail so we always publish results
       - name: Run Playwright tests
         id: playwright
         run: yarn test
         continue-on-error: true
 
-      # Generate Allure 3 Classic report (output dir defined in allurerc.mjs)
       - name: Generate Allure Report
         if: always()
         run: yarn allure:generate
 
-      # Post test summary as a PR comment and create a GitHub Check
-      # Reads allure-report/summary.json produced by allure classic
-      - name: Post Allure Report summary to PR
+      # Compute subdirectories and public URLs for both reports
+      - name: Compute report paths
+        id: report
+        if: always()
+        run: |
+          OWNER="${{ github.repository_owner }}"
+          REPO="${{ github.event.repository.name }}"
+
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            N="${{ github.event.pull_request.number }}"
+            ALLURE_DIR="pr-${N}"
+            PW_DIR="pw-pr-${N}"
+          else
+            ALLURE_DIR="main"
+            PW_DIR="pw-main"
+          fi
+
+          BASE="https://${OWNER}.github.io/${REPO}"
+          echo "allure-dir=${ALLURE_DIR}"          >> "$GITHUB_OUTPUT"
+          echo "allure-url=${BASE}/${ALLURE_DIR}/" >> "$GITHUB_OUTPUT"
+          echo "pw-dir=${PW_DIR}"                  >> "$GITHUB_OUTPUT"
+          echo "pw-url=${BASE}/${PW_DIR}/"         >> "$GITHUB_OUTPUT"
+
+      # ── Allure ──────────────────────────────────
+      - name: Deploy Allure report to gh-pages
+        if: always()
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./allure-report
+          destination_dir: ${{ steps.report.outputs.allure-dir }}
+          keep_files: true
+
+      # GitHub Check + PR comment with stats table; "Report" column → Allure on Pages
+      - name: Post Allure summary
         if: always()
         uses: allure-framework/allure-action@v0.7.0
         with:
           report-directory: allure-report
           github-token: ${{ secrets.GITHUB_TOKEN }}
+          remote-href: ${{ steps.report.outputs.allure-url }}
 
-      # Upload full report for the publish-report job and for manual inspection
-      - name: Upload Allure Report artifact
+      # ── Playwright HTML ──────────────────────────
+      - name: Deploy Playwright report to gh-pages
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: peaceiris/actions-gh-pages@v4
         with:
-          name: allure-report-${{ github.run_number }}
-          path: allure-report/
-          retention-days: 30
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./playwright-report
+          destination_dir: ${{ steps.report.outputs.pw-dir }}
+          keep_files: true
 
-      # Fail the job if tests actually failed (deferred via continue-on-error)
+      # Post Playwright report as a PR comment with stats table (create once, update on re-run)
+      - name: Post Playwright report summary to PR
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        env:
+          PW_REPORT_URL: ${{ steps.report.outputs.pw-url }}
+        with:
+          script: |
+            const postComment = require('./.github/scripts/post-pw-comment.js');
+            await postComment({ github, context, core });
+
+      # ────────────────────────────────────────────
       - name: Assert test outcome
         if: always()
         run: |
           if [ "${{ steps.playwright.outcome }}" = "failure" ]; then
-            echo "Tests failed. See Allure report in artifacts."
+            echo "Tests failed."
+            echo "  Allure:     ${{ steps.report.outputs.allure-url }}"
+            echo "  Playwright: ${{ steps.report.outputs.pw-url }}"
             exit 1
           fi
 
-  # Deploy Allure report to GitHub Pages on every push to main/master
-  publish-report:
-    name: Publish to GitHub Pages
-    needs: test
-    if: |
-      always() &&
-      github.event_name == 'push' &&
-      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+  # ─────────────────────────────────────────────
+  # Cleanup: remove both PR directories from gh-pages
+  # ─────────────────────────────────────────────
+  cleanup:
+    name: Remove PR reports from gh-pages
+    if: github.event_name == 'pull_request' && github.event.action == 'closed'
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-
     steps:
-      - name: Download Allure Report artifact
-        uses: actions/download-artifact@v4
+      - uses: actions/checkout@v4
         with:
-          name: allure-report-${{ github.run_number }}
-          path: allure-report
+          ref: gh-pages
 
-      - name: Setup GitHub Pages
-        uses: actions/configure-pages@v5
+      - name: Delete PR report directories
+        run: |
+          N="${{ github.event.pull_request.number }}"
+          ALLURE_DIR="pr-${N}"
+          PW_DIR="pw-pr-${N}"
 
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: allure-report
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+          REMOVED=0
+          for DIR in "$ALLURE_DIR" "$PW_DIR"; do
+            if [ -d "$DIR" ]; then
+              git rm -rf "$DIR"
+              REMOVED=1
+            fi
+          done
+
+          if [ "$REMOVED" = "1" ]; then
+            git commit -m "chore: remove reports for PR #${N}"
+            git push
+          else
+            echo "Nothing to clean up for PR #${N}"
+          fi
